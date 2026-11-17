@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card">
+  <h2>1. 上传目录 CSV（列：来源、原编号、名称）</h2>
+  <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" class="row">
+    <input type="file" name="csv_file" accept=".csv,text/csv" required>
+    <button type="submit">上传并核对唯一性</button>
+  </form>
+  <p class="muted" style="margin-bottom:0">
+    来源 + 原编号组合必须唯一：文件内重复将整批拒绝；库中已存在的组合跳过且<strong>原记录不改写</strong>。
+    可参考示例文件 <code>examples/sample_catalog.csv</code>。
+  </p>
+</section>
+
+<section class="card">
+  <h2>2. 记录与去重组
+    <span class="muted">共 <span class="stat">{{ records|length }}</span> 条记录，
+      <span class="stat">{{ groups|length }}</span> 个去重组，
+      其中多记录组 <span class="stat">{{ multi_group_count }}</span> 个</span>
+  </h2>
+  {% if records %}
+  <table>
+    <thead>
+      <tr><th>去重组</th><th>记录ID</th><th>来源</th><th>原编号</th><th>名称</th><th>选择</th></tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+        {% set gid = group_map[r.id] %}
+        <tr class="{{ 'multi' if group_sizes[gid] > 1 else '' }}">
+          <td><span class="pill grp">{{ gid }}</span></td>
+          <td>{{ r.id }}</td>
+          <td>{{ r.source }}</td>
+          <td>{{ r.original_no }}</td>
+          <td>{{ r.name }}</td>
+          <td>
+            <label><input type="radio" name="pick" value="{{ r.id }}" class="pick-a"> 选为 A</label>
+            <label><input type="radio" name="pick2" value="{{ r.id }}" class="pick-b"> 选为 B</label>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">暂无记录，请先上传 CSV。</p>
+  {% endif %}
+</section>
+
+{% if records %}
+<form id="judge-form" action="{{ url_for('judge') }}" method="post" class="judge-bar">
+  <strong>3. 核对两条记录：</strong>
+  <label>记录A <input type="number" name="record_a" min="1" required style="width:90px"></label>
+  <label>记录B <input type="number" name="record_b" min="1" required style="width:90px"></label>
+  <span>
+    <label class="verdict"><input type="radio" name="verdict" value="same" required> 同物</label>
+    <label class="verdict"><input type="radio" name="verdict" value="different"> 异物</label>
+  </span>
+  <button type="submit">提交判断</button>
+  <span class="muted">可直接填记录 ID，或在上表点“选为 A / 选为 B”自动带入。冲突时操作会被拒绝并展示判断链，原状不变。</span>
+</form>
+<script>
+  document.querySelectorAll('.pick-a').forEach(function (el) {
+    el.addEventListener('change', function () {
+      document.querySelector('#judge-form input[name=record_a]').value = el.value;
+    });
+  });
+  document.querySelectorAll('.pick-b').forEach(function (el) {
+    el.addEventListener('change', function () {
+      document.querySelector('#judge-form input[name=record_b]').value = el.value;
+    });
+  });
+</script>
+{% endif %}
+
+<section class="card">
+  <h2>4. 已提交判断（可撤销；撤销后分组按剩余判断重新形成）</h2>
+  {% if judgments %}
+  <table>
+    <thead><tr><th>判断#</th><th>记录A</th><th>记录B</th><th>结论</th><th>操作</th></tr></thead>
+    <tbody>
+      {% for j in judgments %}
+      <tr>
+        <td>{{ j.id }}</td>
+        <td>{{ j.a.source }}/{{ j.a.original_no }}（{{ j.a.name }}）<span class="muted">#{{ j.a.id }}</span></td>
+        <td>{{ j.b.source }}/{{ j.b.original_no }}（{{ j.b.name }}）<span class="muted">#{{ j.b.id }}</span></td>
+        <td><span class="pill {{ j.verdict }}">{{ j.verdict_label }}</span></td>
+        <td>
+          <form class="inline" action="{{ url_for('undo', judgment_id=j.id) }}" method="post"
+                onsubmit="return confirm('确认撤销判断 #{{ j.id }}？分组将按剩余判断重新计算。');">
+            <button type="submit" class="danger">撤销</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">尚无判断。</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>5. 下载去重组映射</h2>
+  <p class="muted">映射在单个数据库事务快照中生成，对应某一完整判断状态；每条原记录一行，含其所属去重组。</p>
+  <a class="btn secondary" href="{{ url_for('download_mapping') }}">下载 dereplication_mapping.csv</a>
+</section>
+
+{% endblock %}

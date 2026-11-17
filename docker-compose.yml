@@ -1,0 +1,16 @@
+services:
+  web:
+    build: .
+    image: catalog-dedup:latest
+    container_name: catalog-dedup
+    ports:
+      - "8000:8000"
+    volumes:
+      - catalog-data:/data
+    environment:
+      DB_PATH: /data/catalog.db
+      SECRET_KEY: change-me-in-production
+    restart: unless-stopped
+
+volumes:
+  catalog-data:

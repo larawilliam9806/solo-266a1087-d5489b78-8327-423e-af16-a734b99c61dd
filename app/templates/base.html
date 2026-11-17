@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}同物异号核对工作台{% endblock %}</title>
+  <style>
+    :root { --line:#d9dde3; --bg:#f5f7fa; --blue:#2457d6; --red:#c0392b; --green:#1e7d46; --amber:#9a6700; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+           background:var(--bg); color:#1f2933; line-height:1.55; }
+    header { background:#152a4f; color:#fff; padding:14px 24px; }
+    header h1 { margin:0; font-size:20px; }
+    header p { margin:4px 0 0; font-size:13px; color:#b8c4d8; }
+    main { max-width:1180px; margin:22px auto; padding:0 18px; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin-bottom:20px; }
+    .card h2 { margin:0 0 12px; font-size:16px; }
+    table { border-collapse:collapse; width:100%; font-size:13px; }
+    th, td { border:1px solid var(--line); padding:7px 9px; text-align:left; vertical-align:top; }
+    th { background:#eef2f7; }
+    tr.multi td:first-child { background:#e8f5e9; }
+    .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; }
+    .pill.same { background:#e3f2fd; color:#1554a8; }
+    .pill.diff { background:#fdecea; color:var(--red); }
+    .pill.grp  { background:#e8f5e9; color:var(--green); font-weight:600; }
+    .flash { border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:14px; border:1px solid; }
+    .flash.ok { background:#edf8f1; border-color:#b7e0c6; color:var(--green); }
+    .flash.error, .flash.conflict { background:#fdecea; border-color:#f2b6b0; color:var(--red); }
+    .flash.warn { background:#fff8e6; border-color:#ecd98f; color:var(--amber); }
+    .chain { margin:8px 0 0; padding-left:20px; font-size:13px; }
+    .chain li { margin-bottom:4px; }
+    form.inline { display:inline; }
+    button, .btn { font:inherit; border-radius:7px; border:1px solid var(--blue); background:var(--blue);
+            color:#fff; padding:7px 16px; cursor:pointer; text-decoration:none; display:inline-block; }
+    button.secondary, .btn.secondary { background:#fff; color:var(--blue); }
+    button.danger { border-color:var(--red); background:var(--red); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .row { display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+    .muted { color:#6b7684; font-size:12px; }
+    .stat { font-weight:600; color:var(--blue); }
+    input[type=file] { font:inherit; }
+    .judge-bar { position:sticky; bottom:0; background:#fffbe6; border:1px solid #ecd98f; border-radius:10px;
+                 padding:12px 16px; margin-top:10px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+    label.verdict { margin-right:6px; }
+    .empty { color:#6b7684; padding:14px 0; }
+    code { background:#eef2f7; padding:1px 5px; border-radius:4px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>藏品同物异号核对工作台</h1>
+  <p>上传目录 CSV → 逐条确认同物 / 异物（同物关系自动传递，异物不得同组）→ 下载去重组映射；原记录永不改写，判断可撤销。</p>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, msg in messages %}
+      <div class="flash {{ category }}">
+        {% if msg is iterable and msg is not string %}
+          <div>{{ msg[1] }}</div>
+          {% if msg|length > 2 and msg[2] %}
+            <strong>导致冲突的判断链：</strong>
+            <ol class="chain">
+              {% for step in msg[2] %}
+                <li>
+                  判断 #{{ step.judgment_id }}：
+                  {{ step.from_record.source }}/{{ step.from_record.original_no }}（{{ step.from_record.name }}）
+                  —<span class="pill {{ step.verdict }}">{{ step.verdict_label }}</span>→
+                  {{ step.to_record.source }}/{{ step.to_record.original_no }}（{{ step.to_record.name }}）
+                </li>
+              {% endfor %}
+            </ol>
+          {% endif %}
+        {% else %}
+          {{ msg }}
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
