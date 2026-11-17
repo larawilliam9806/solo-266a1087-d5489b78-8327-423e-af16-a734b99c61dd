@@ -2,12 +2,15 @@
 
 import csv
 import io
+import json
 import os
 
 from flask import (
     Flask,
     Response,
+    abort,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -15,6 +18,7 @@ from flask import (
 )
 
 from . import db as dbmod
+from . import feed as feedmod
 from .csvutil import CsvImportError, parse_catalog
 from .logic import DIFFERENT, SAME, group_sizes
 
@@ -196,6 +200,104 @@ def create_app(db_path=None):
             headers={
                 "Content-Disposition": "attachment; filename=dereplication_mapping.csv"
             },
+        )
+
+    # ---------- 增量供数：页面 ----------
+
+    @app.route("/feed")
+    def feed_page():
+        conn = get_db()
+        try:
+            subscriptions = dbmod.list_subscriptions(conn)
+            detail = None
+            sub_id = request.args.get("subscription_id", type=int)
+            if sub_id is not None:
+                sub = dbmod.get_subscription(conn, sub_id)
+                if sub is None:
+                    abort(404)
+                detail = {
+                    "subscription": sub,
+                    "batches": dbmod.list_batches(conn, sub_id),
+                }
+        finally:
+            conn.close()
+        return render_template(
+            "feed.html", subscriptions=subscriptions, detail=detail
+        )
+
+    # ---------- 增量供数：JSON API ----------
+
+    @app.route("/api/subscriptions", methods=["POST"])
+    def api_create_subscription():
+        payload = request.get_json(silent=True) or request.form
+        name = (payload.get("name") or "").strip() if payload else ""
+        if not name:
+            return jsonify({"error": "订阅名称不能为空"}), 400
+        if len(name) > 100:
+            return jsonify({"error": "订阅名称不能超过 100 个字符"}), 400
+        conn = get_db()
+        try:
+            result = dbmod.create_subscription(conn, name)
+        finally:
+            conn.close()
+        return jsonify(result), 201
+
+    @app.route("/api/subscriptions/<int:subscription_id>/claim", methods=["POST"])
+    def api_claim(subscription_id):
+        conn = get_db()
+        try:
+            result = dbmod.claim_next_batch(conn, subscription_id)
+        finally:
+            conn.close()
+        if result["status"] == "not_found":
+            return jsonify({"error": "订阅不存在"}), 404
+        if result["status"] == "up_to_date":
+            return jsonify({"status": "up_to_date", "message": "暂无新变化"})
+        return jsonify({
+            "status": result["status"],
+            "batch": feedmod.batch_payload(result["batch"]),
+        })
+
+    @app.route("/api/subscriptions/<int:subscription_id>/batches/<int:batch_no>")
+    def api_get_batch(subscription_id, batch_no):
+        conn = get_db()
+        try:
+            batch = dbmod.get_batch_by_no(conn, subscription_id, batch_no)
+            if batch is None:
+                return jsonify({"error": "批次不存在"}), 404
+        finally:
+            conn.close()
+        return jsonify(feedmod.batch_payload(batch))
+
+    @app.route("/api/subscriptions/<int:subscription_id>/ack/<int:batch_no>",
+               methods=["POST"])
+    def api_ack(subscription_id, batch_no):
+        conn = get_db()
+        try:
+            result = dbmod.acknowledge_batch(conn, subscription_id, batch_no)
+        finally:
+            conn.close()
+        status_code = 200
+        if result["status"] == "not_found":
+            status_code = 404
+        return jsonify(result), status_code
+
+    @app.route("/api/subscriptions/<int:subscription_id>/batches/<int:batch_no>/download")
+    def api_download_batch(subscription_id, batch_no):
+        conn = get_db()
+        try:
+            batch = dbmod.get_batch_by_no(conn, subscription_id, batch_no)
+            if batch is None:
+                abort(404)
+            payload = feedmod.batch_payload(batch)
+        finally:
+            conn.close()
+        data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        filename = "subscription_%d_batch_%03d.json" % (subscription_id, batch_no)
+        return Response(
+            data,
+            mimetype="application/json; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=%s" % filename},
         )
 
     return app

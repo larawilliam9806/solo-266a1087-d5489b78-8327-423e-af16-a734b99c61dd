@@ -33,3 +33,31 @@
    再撤销 #2，2、3 才各自成组。
 7. 点击“下载 dereplication_mapping.csv”：每条原记录一行，含其所属去重组 ID 与组内记录数。
    映射在单个读事务快照中生成，对应某一完整判断状态。
+
+## 增量供数演示（页面 http://localhost:8000/feed 或直接调 JSON API）
+
+1. 打开“增量供数 / 订阅”页，输入订阅名称（如“检索库生产环境”）创建订阅。
+   后端在同一事务内固化**批次 #1 首批全量快照**（10 条记录，含记录ID、来源、原编号、
+   名称、新组ID），可直接“下载”得到 JSON 文件供检索库建立初始覆盖索引。
+2. 回到核对工作台提交 `1 same 2`（记录 2 归属由 G00002 变为 G00001）。
+3. 在供数页对订阅点“领取下一批”：因首批尚未确认，先返回批次 #1（标识与内容不变）；
+   点“确认本批”确认 #1 后再次领取，得到**批次 #2 增量**，其中仅含归属实际变化的
+   记录 2，`op_type=judge`、`new_group_id=G00001`。
+4. 重复点“领取下一批”：始终返回同一批次 #2（`pending`），证明未确认批次的标识与
+   内容保持不变；此时再做的新判断不会混入 #2，只会留到后续批次。
+5. 点“确认本批”确认 #2；再次确认 #2 提示“重复确认无副作用”；无新变化时领取返回
+   `up_to_date`。
+6. 撤销判断 #1 后领取批次 #3：`op_type=undo`，记录 2 的新组 ID 回到 G00002，
+   说明撤销造成的归属变化同样按序整批交付。
+7. 重启容器（`docker compose restart`）后重新领取：待确认批次原样返回，
+   游标与历史批次均不丢失、不跳号。
+8. 对应 curl 流程：
+
+   ```bash
+   curl -X POST localhost:8000/api/subscriptions -H 'Content-Type: application/json' \
+        -d '{"name":"检索库生产环境"}'
+   curl -X POST localhost:8000/api/subscriptions/1/claim          # 首批 pending
+   curl -X POST localhost:8000/api/subscriptions/1/ack/1          # 确认首批
+   curl -X POST localhost:8000/api/subscriptions/1/claim          # 增量批次
+   curl localhost:8000/api/subscriptions/1/batches/2/download -O  # 下载批次 JSON
+   ```

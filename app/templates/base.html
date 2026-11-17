@@ -50,6 +50,10 @@
 <header>
   <h1>藏品同物异号核对工作台</h1>
   <p>上传目录 CSV → 逐条确认同物 / 异物（同物关系自动传递，异物不得同组）→ 下载去重组映射；原记录永不改写，判断可撤销。</p>
+  <nav style="margin-top:8px">
+    <a class="btn secondary" style="padding:3px 12px;font-size:12px" href="{{ url_for('index') }}">核对工作台</a>
+    <a class="btn secondary" style="padding:3px 12px;font-size:12px" href="{{ url_for('feed_page') }}">增量供数 / 订阅</a>
+  </nav>
 </header>
 <main>
   {% with messages = get_flashed_messages(with_categories=true) %}

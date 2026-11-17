@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}增量供数 / 订阅 — 同物异号核对工作台{% endblock %}
+{% block content %}
+
+<section class="card">
+  <h2>增量供数说明</h2>
+  <p class="muted" style="margin-top:0">
+    研究员把核对后的藏品目录持续同步到检索库：创建订阅后先下载<strong>首批全量快照</strong>，
+    之后按发生顺序逐批领取由<strong>导入 / 判定 / 撤销</strong>造成的归属变化。
+    每条 JSON 含 <code>record_id（记录ID）、source（来源）、original_no（原编号）、name（名称）、new_group_id（新组ID）</code>，
+    供下游覆盖索引。一次操作影响的记录整批交付，不拆分、不合并。
+  </p>
+  <ul class="muted" style="margin-bottom:0">
+    <li>未确认批次的标识与内容保持不变，重复领取返回同一批；新变化留到后续批次。</li>
+    <li>确认须指定批次号；重复确认无副作用；存在更早未确认批次时不能先确认新批。</li>
+    <li>业务操作与变化记录在同一数据库事务提交：失败不产生供数记录，成功不漏记变化。</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>1. 创建订阅（含首批全量数据）</h2>
+  <form id="create-form" class="row">
+    <input type="text" id="sub-name" placeholder="订阅名称，如：检索库生产环境" maxlength="100" required
+           style="flex:1;min-width:260px;padding:7px 10px;font:inherit;border:1px solid var(--line);border-radius:7px">
+    <button type="submit">创建订阅</button>
+  </form>
+  <div id="create-result" class="muted" style="margin-top:10px"></div>
+</section>
+
+<section class="card">
+  <h2>2. 订阅列表</h2>
+  {% if subscriptions %}
+  <table>
+    <thead>
+      <tr><th>订阅ID</th><th>名称</th><th>已生成批次</th><th>已确认到</th><th>创建时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for s in subscriptions %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.name }}</td>
+        <td>{{ s.batch_count }}</td>
+        <td>
+          批次 #{{ s.acked_batch_no }}
+          {% if s.acked_batch_no < s.batch_count %}
+            <span class="pill diff">有未确认批次</span>
+          {% else %}
+            <span class="pill same">全部已确认</span>
+          {% endif %}
+        </td>
+        <td class="muted">{{ s.created_at }}</td>
+        <td><a class="btn secondary" style="padding:4px 12px;font-size:12px"
+               href="{{ url_for('feed_page', subscription_id=s.id) }}">查看 / 领取批次</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">尚无订阅，请先创建。</p>
+  {% endif %}
+</section>
+
+{% if detail %}
+<section class="card">
+  <h2>3. 订阅 #{{ detail.subscription.id }}「{{ detail.subscription.name }}」的批次</h2>
+  <p class="muted" style="margin-top:0">
+    订阅游标已消费到变化集 #{{ detail.subscription.last_change_id }}。
+    批次 #1 为首批全量快照；其余批次各对应一次业务操作的完整变化集。
+  </p>
+  <div class="row" style="margin-bottom:12px">
+    <button type="button" onclick="claimBatch({{ detail.subscription.id }})">领取下一批</button>
+    <span class="muted">有未确认批次时返回原批次；无新变化时提示 up_to_date。</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>批次号</th><th>类型</th><th>来源操作</th><th>变化集#</th><th>条目数</th><th>状态</th><th>生成时间</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for b in detail.batches %}
+      <tr>
+        <td>#{{ b.batch_no }}</td>
+        <td>
+          {% if b.kind == 'snapshot' %}
+            <span class="pill grp">首批全量</span>
+          {% else %}
+            <span class="pill same">增量变化</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if b.kind == 'snapshot' %}创建订阅时快照{% else %}变化集 #{{ b.change_set_id }}{% endif %}
+        </td>
+        <td>{{ b.change_set_id if b.change_set_id is not none else '—' }}</td>
+        <td>{{ b.item_count }}</td>
+        <td>
+          {% if b.acked_at %}
+            <span class="pill grp">已确认</span>
+            <span class="muted">{{ b.acked_at }}</span>
+          {% else %}
+            <span class="pill diff">待确认</span>
+          {% endif %}
+        </td>
+        <td class="muted">{{ b.created_at }}</td>
+        <td>
+          <button type="button" class="secondary" style="padding:4px 10px;font-size:12px"
+                  onclick="viewBatch({{ detail.subscription.id }}, {{ b.batch_no }})">查看 JSON</button>
+          <a class="btn secondary" style="padding:4px 10px;font-size:12px"
+             href="{{ url_for('api_download_batch', subscription_id=detail.subscription.id, batch_no=b.batch_no) }}">下载</a>
+          {% if not b.acked_at %}
+          <button type="button" style="padding:4px 10px;font-size:12px"
+                  onclick="ackBatch({{ detail.subscription.id }}, {{ b.batch_no }})">确认本批</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div id="batch-viewer" style="margin-top:16px;display:none">
+    <h3 style="font-size:14px;margin-bottom:6px">批次 JSON（供下游覆盖索引）</h3>
+    <pre id="batch-json" style="background:#152a4f;color:#e8eef7;padding:14px;border-radius:8px;
+         font-size:12px;overflow:auto;max-height:420px;margin:0"></pre>
+  </div>
+  <div id="action-msg" class="muted" style="margin-top:10px"></div>
+</section>
+
+<script>
+const SUB_ID = {{ detail.subscription.id }};
+
+function showMsg(text, ok) {
+  const el = document.getElementById('action-msg');
+  el.style.color = ok ? 'var(--green)' : 'var(--red)';
+  el.textContent = text;
+}
+
+async function claimBatch(subId) {
+  const resp = await fetch(`/api/subscriptions/${subId}/claim`, {method: 'POST'});
+  const data = await resp.json();
+  if (data.status === 'up_to_date') {
+    showMsg('暂无新变化（up_to_date），所有变化均已固化为批次。', true);
+    return;
+  }
+  const b = data.batch;
+  showMsg(`批次 #${b.batch_no}（${data.status === 'pending' ? '未确认，返回原批次' : '新固化'}）：${b.item_count} 条记录，1 秒后刷新页面…`, true);
+  setTimeout(() => window.location.reload(), 1000);
+}
+
+async function ackBatch(subId, batchNo) {
+  const resp = await fetch(`/api/subscriptions/${subId}/ack/${batchNo}`, {method: 'POST'});
+  const data = await resp.json();
+  if (data.status === 'ok') {
+    showMsg(`批次 #${batchNo} 已确认，1 秒后刷新…`, true);
+    setTimeout(() => window.location.reload(), 1000);
+  } else if (data.status === 'already_acked') {
+    showMsg(`批次 #${batchNo} 此前已确认，重复确认无副作用。`, true);
+  } else if (data.status === 'blocked') {
+    showMsg(`批次 #${batchNo} 之前还有未确认批次，请按顺序确认（旧确认不能推进新批）。`, false);
+  } else {
+    showMsg('确认失败：' + (data.error || '未知错误'), false);
+  }
+}
+
+async function viewBatch(subId, batchNo) {
+  const resp = await fetch(`/api/subscriptions/${subId}/batches/${batchNo}`);
+  const data = await resp.json();
+  document.getElementById('batch-viewer').style.display = 'block';
+  document.getElementById('batch-json').textContent = JSON.stringify(data, null, 2);
+}
+</script>
+{% endif %}
+
+<script>
+document.getElementById('create-form').addEventListener('submit', async function (ev) {
+  ev.preventDefault();
+  const name = document.getElementById('sub-name').value.trim();
+  const resultEl = document.getElementById('create-result');
+  if (!name) { resultEl.textContent = '请输入订阅名称'; resultEl.style.color = 'var(--red)'; return; }
+  const resp = await fetch('/api/subscriptions', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  const data = await resp.json();
+  if (resp.ok) {
+    resultEl.style.color = 'var(--green)';
+    resultEl.textContent = `已创建订阅 #${data.id}，首批全量批次 #${data.first_batch_no} 含 ${data.item_count} 条记录，1 秒后刷新…`;
+    setTimeout(() => window.location.href = '/feed?subscription_id=' + data.id, 1000);
+  } else {
+    resultEl.style.color = 'var(--red)';
+    resultEl.textContent = '创建失败：' + (data.error || '未知错误');
+  }
+});
+</script>
+
+{% endblock %}
